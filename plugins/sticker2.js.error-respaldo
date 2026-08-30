@@ -1,0 +1,97 @@
+const { execFile } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { promisify } = require('util');
+const { Sticker } = require('wa-sticker-formatter');
+const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
+
+const execFileAsync = promisify(execFile);
+const META_FILE = path.join(process.cwd(), 'sticker_meta.json');
+
+function isUserRegistered(sender) {
+    if (!fs.existsSync('./database.json')) return false;
+    try {
+        const db = JSON.parse(fs.readFileSync('./database.json', 'utf8'));
+        return !!db[sender];
+    } catch {
+        return false;
+    }
+}
+
+const handler = {
+    command: ['s', 'sticker', 'st', 'stiker'],
+    execute: async (m, { conn, from, args }) => {
+        if (!isUserRegistered(m.sender)) {
+            return conn.sendMessage(from, { text: "🚫 *¡Alto ahí, pecador!* 🚫\n\nNo puedes acceder a mis servicios sin antes haber firmado tu contrato. Usa `.reg [nombre] [edad]`." }, { quoted: m });
+        }
+
+        // --- Lógica de Metadatos (Versión Flexible) ---
+        let packname = "Friends Happy Bot Radio";
+        let author = "Friends Happy Bot";
+
+        if (fs.existsSync(META_FILE)) {
+            try {
+                const meta = JSON.parse(fs.readFileSync(META_FILE, 'utf8'));
+                // Buscamos dentro de 'users[m.sender]' o directamente en la raíz del archivo
+                const data = meta.users?.[m.sender] || meta;
+
+                // Detectamos tanto 'packname'/'author' como 'text1'/'text2'
+                packname = data.packname || data.text1 || packname;
+                author = data.author || data.text2 || author;
+                
+                console.log(`[DEBUG] Sticker Meta: Pack='${packname}', Author='${author}'`);
+            } catch (e) { console.error("Error al leer metadatos:", e); }
+        }
+
+        const q = m.quoted ? m.quoted : m;
+        const mediaMessage = q.message?.imageMessage || q.message?.videoMessage || q.message?.stickerMessage || 
+                             q.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage ||
+                             q.message?.extendedTextMessage?.contextInfo?.quotedMessage?.videoMessage ||
+                             q.message?.extendedTextMessage?.contextInfo?.quotedMessage?.stickerMessage;
+
+        if (!mediaMessage) return conn.sendMessage(from, { text: '⚠️ Envía o responde a una imagen, video o sticker.' }, { quoted: m });
+
+
+        try {
+            const type = q.message?.stickerMessage || q.message?.extendedTextMessage?.contextInfo?.quotedMessage?.stickerMessage ? 'sticker' : 
+                         (q.message?.videoMessage || q.message?.extendedTextMessage?.contextInfo?.quotedMessage?.videoMessage ? 'video' : 'image');
+            
+            const stream = await downloadContentFromMessage(mediaMessage, type);
+            let buffer = Buffer.from([]);
+            for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+
+            let stickerBuffer;
+            if (type === 'sticker') {
+                stickerBuffer = await new Sticker(buffer, { pack: packname, author: author, type: 'full' }).toBuffer();
+            } else {
+                const id = `tmp_${Date.now()}`;
+                const input = path.join(os.tmpdir(), `${id}.bin`);
+                const output = path.join(os.tmpdir(), `${id}.webp`);
+                
+                fs.writeFileSync(input, buffer);
+                await execFileAsync('ffmpeg', [
+                    '-y', '-i', input, '-t', '6',
+                    '-vf', 'scale=384:384:force_original_aspect_ratio=decrease,pad=384:384:(ow-iw)/2:(oh-ih)/2:color=black@0.0,fps=10',
+                    '-c:v', 'libwebp',
+                    '-lossless', '0',
+                    '-q:v', '55',
+                    '-compression_level', '6',
+                    '-an',
+                    '-f', 'webp',
+                    output
+                ]);
+                stickerBuffer = await new Sticker(fs.readFileSync(output), { pack: packname, author: author, type: 'full' }).toBuffer();
+                
+                if (fs.existsSync(input)) fs.unlinkSync(input);
+                if (fs.existsSync(output)) fs.unlinkSync(output);
+            }
+
+            await conn.sendMessage(from, { sticker: stickerBuffer }, { quoted: m });
+        } catch (error) { console.error('ERROR STICKER:', error);
+            await conn.sendMessage(from, { text: `❌ ¡Ups! Algo salió mal, querido: ${error.message}` }, { quoted: m });
+        }
+    }
+};
+
+module.exports = handler;

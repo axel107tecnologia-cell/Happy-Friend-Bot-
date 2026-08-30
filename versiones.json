@@ -1,0 +1,41 @@
+{
+  "versionActual": "1.5.0.1",
+  "actualizaciones": 7,
+  "historial": [
+    {
+      "version": "1.0.0",
+      "fecha": "22/08/2026",
+      "cambios": "Versión inicial de Friends Happy Bot"
+    },
+    {
+      "version": "1.1.0",
+      "fecha": "23/08/2026",
+      "cambios": "Se agregó el historial de versiones y mejoras del comando info"
+    },
+    {
+      "version": "1.2.0",
+      "fecha": "23/08/2026",
+      "cambios": "Nuevo menú, estilos aleatorios y comandos de Owner"
+    },
+    {
+      "version": "1.3.0",
+      "fecha": "24/08/2026",
+      "cambios": "Nuevos comandos de IA, Instagram y administración de sub-bots; mejoras del menú y compatibilidad de sesiones"
+    },
+    {
+      "version": "1.4.0",
+      "fecha": "26/08/2026",
+      "cambios": "Anti-link mejorado: solo bloquea enlaces de invitación de WhatsApp; enlaces de redes sociales permitidos; .setbot corregido para responder con un solo bot; filtro de selección aplicado también al anti-link"
+    },
+    {
+      "version": "1.4.0",
+      "fecha": "26/08/2026",
+      "cambios": "Anti-link mejorado: solo bloquea enlaces de invitación de WhatsApp; enlaces de redes sociales permitidos; .setbot corregido para responder con un solo bot; filtro de selección aplicado también al anti-link"
+    },
+    {
+      "version": "1.5.0.1",
+      "fecha": "27/08/2026",
+      "cambios": "Actualización del paquete de stickers; nuevo formato compatible, pack con fecha automática, autor vacío y mejor procesamiento de imágenes, videos y stickers"
+    }
+  ]
+}

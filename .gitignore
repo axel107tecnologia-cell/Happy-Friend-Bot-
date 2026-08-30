@@ -38,8 +38,6 @@ auth_info/
 *.baileys6
 settings.js
 welcome-settings.json
-*.disabled
-
-*.disabled
-
+database/
+*.respaldo*
 *.disabled

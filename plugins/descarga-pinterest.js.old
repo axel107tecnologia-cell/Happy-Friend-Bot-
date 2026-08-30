@@ -1,0 +1,93 @@
+const fs = require('fs');
+const path = require('path');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
+
+const run = promisify(execFile);
+
+module.exports = {
+    command: ['pin', 'pinterest'],
+
+    execute: async (m, { sock, from, args }) => {
+        const url = args[0];
+
+        if (!url || !url.includes('pinterest')) {
+            return sock.sendMessage(
+                from,
+                { text: 'Envía el enlace de un Pin de Pinterest.' },
+                { quoted: m }
+            );
+        }
+
+        const tmpDir = path.join(process.cwd(), 'tmp');
+        fs.mkdirSync(tmpDir, { recursive: true });
+
+        const output = path.join(tmpDir, `pin-${Date.now()}.%(ext)s`);
+
+        try {
+            await sock.sendMessage(from, {
+                react: { text: '⌛', key: m.key }
+            });
+
+            const { stdout } = await run('yt-dlp', [
+                '--no-playlist',
+                '--no-warnings',
+                '--print', 'after_move:filepath',
+                '-o', output,
+                url
+            ], { maxBuffer: 10 * 1024 * 1024 });
+
+            const filePath = stdout
+                .split('\n')
+                .map(x => x.trim())
+                .filter(Boolean)
+                .pop();
+
+            if (!filePath || !fs.existsSync(filePath)) {
+                throw new Error('No se pudo descargar el Pin.');
+            }
+
+            const media = fs.readFileSync(filePath);
+            const extension = path.extname(filePath).toLowerCase();
+
+            if (['.jpg', '.jpeg', '.png', '.webp'].includes(extension)) {
+                await sock.sendMessage(
+                    from,
+                    {
+                        image: media,
+                        caption: '📌 Pin descargado por Friends Happy Bot'
+                    },
+                    { quoted: m }
+                );
+            } else {
+                await sock.sendMessage(
+                    from,
+                    {
+                        video: media,
+                        mimetype: 'video/mp4',
+                        caption: '📌 Pin descargado por Friends Happy Bot'
+                    },
+                    { quoted: m }
+                );
+            }
+
+            await sock.sendMessage(from, {
+                react: { text: '✅', key: m.key }
+            });
+
+            fs.unlinkSync(filePath);
+        } catch (error) {
+            console.error('Error en Pinterest:', error.message);
+
+            await sock.sendMessage(from, {
+                react: { text: '❌', key: m.key }
+            });
+
+            await sock.sendMessage(
+                from,
+                { text: `⚠️ No pude descargar el Pin: ${error.message}` },
+                { quoted: m }
+            );
+        }
+    }
+};
