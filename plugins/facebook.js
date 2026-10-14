@@ -56,7 +56,7 @@ module.exports = {
                     '--concurrent-fragments',
                     '8',
                     '-f',
-                    'best[height<=720][ext=mp4]/best[height<=720]/worst[ext=mp4]/worst',
+                    'bestvideo[height<=720]+bestaudio/best[height<=720]/best[ext=mp4]/best',
                     '--merge-output-format',
                     'mp4',
                     '-o',
@@ -151,35 +151,6 @@ module.exports = {
                   '╰━━━━━━━━━━━━━━━━╯';
 
 
-            await ejecutar(
-                'ffmpeg',
-                [
-                    '-y',
-                    '-i',
-                    rutaVideo,
-                    '-vf',
-                    'scale=-2:min(720,ih)',
-                    '-c:v',
-                    'libx264',
-                    '-preset',
-                    'veryfast',
-                    '-crf',
-                    '23',
-                    '-c:a',
-                    'aac',
-                    '-b:a',
-                    '96k',
-                    '-ac',
-                    '2',
-                    '-ar',
-                    '44100',
-                    '-movflags',
-                    '+faststart',
-                    videoLigero
-                ],
-                { timeout: 180000 }
-            );
-
             await sock.sendMessage(from, {
                 react: {
                     text: '✅',
@@ -190,7 +161,7 @@ module.exports = {
             await sock.sendMessage(
                 from,
                 {
-                    video: fs.readFileSync(videoLigero),
+                    video: fs.readFileSync(rutaVideo),
                     mimetype: 'video/mp4',
                     caption: caracteristicas
                 },

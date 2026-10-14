@@ -1,5 +1,5 @@
 {
-  "versionActual": "1.5.0.1",
+  "versionActual": "2.0.0",
   "actualizaciones": 7,
   "historial": [
     {
@@ -36,6 +36,11 @@
       "version": "1.5.0.1",
       "fecha": "27/08/2026",
       "cambios": "Actualización del paquete de stickers; nuevo formato compatible, pack con fecha automática, autor vacío y mejor procesamiento de imágenes, videos y stickers"
+    },
+    {
+      "version": "1.6",
+      "fecha": "13/09/2026",
+      "cambios": "Soporte para videos largos, calidad fija de 480p y compresión optimizada para facilitar el envío"
     }
   ]
 }

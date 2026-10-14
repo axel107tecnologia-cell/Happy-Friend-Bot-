@@ -1,46 +1,181 @@
+'use strict';
+
 const fs = require('fs');
+const path = require('path');
+const archivo = path.join(process.cwd(), 'database.json');
+
+const REGALO_MONEDAS = 50000;
+const REGALO_XP = 1000;
+
+function idDe(m) {
+    return (
+        m.sender ||
+        m.participant ||
+        m.key?.participant ||
+        m.key?.participantAlt ||
+        m.key?.remoteJid ||
+        m.key?.remoteJidAlt
+    );
+}
+
+function limpiar(id) {
+    return String(id || '').replace(/:\d+(?=@)/, '').trim();
+}
+
+function leer() {
+    if (!fs.existsSync(archivo)) return {};
+
+    try {
+        const datos = JSON.parse(fs.readFileSync(archivo, 'utf8'));
+        return datos && typeof datos === 'object' && !Array.isArray(datos)
+            ? datos
+            : null;
+    } catch {
+        return null;
+    }
+}
+
+function obtenerBaseEconomia() {
+    if (!global.db || typeof global.db.write !== 'function') {
+        const base = require('../src/database/db.js');
+        global.db = base.default || base;
+    }
+
+    global.db.data ||= {};
+    global.db.data.users ||= {};
+
+    if (typeof global.db.write !== 'function') {
+        throw new Error('No está disponible el guardado de la economía.');
+    }
+
+    return global.db;
+}
+
+function claveEconomia(users, usuario, id) {
+    const posibles = [usuario, id].filter(Boolean);
+
+    for (const posible of posibles) {
+        if (users[posible]) return posible;
+    }
+
+    const normalizados = new Set(posibles.map(limpiar));
+    return Object.keys(users).find(clave =>
+        normalizados.has(limpiar(clave))
+    ) || id;
+}
 
 module.exports = {
-    command: ['reg', 'registrar', 'contrato'],
-    execute: async (m, { conn, from, args }) => {
-        // Cargar o crear base de datos
-        let db = {};
-        if (fs.existsSync('./database.json')) {
-            db = JSON.parse(fs.readFileSync('./database.json', 'utf8'));
+    command: ['reg', 'register', 'registrar'],
+
+    execute: async (m, { sock, from, args }) => {
+        const usuarioOriginal = idDe(m);
+        const id = limpiar(usuarioOriginal);
+        const nombre = Array.isArray(args) ? args.join(' ').trim() : '';
+
+        if (!nombre) {
+            return sock.sendMessage(
+                from,
+                {
+                    text:
+                        '📲 Regístrate usando:\n\n' +
+                        '.reg nombre.edad\n\n' +
+                        'Ejemplo:\n' +
+                        '.reg Axel.18'
+                },
+                { quoted: m }
+            );
         }
 
-        const userId = m.sender;
+        if (!id) {
+            return sock.sendMessage(from, {
+                text: '❌ No pude identificar tu usuario; no guardé cambios.'
+            });
+        }
 
-        if (db[userId]) return conn.sendMessage(from, { text: "⚠️ ¡Ya has firmado tu contrato con el Hotel, pecador!" }, { quoted: m });
-        if (args.length < 2) return conn.sendMessage(from, { text: "⚠️ Uso: .reg [nombre] [edad]\n\n*Ejemplo: .reg Friends Happy Bot 100*" }, { quoted: m });
+        const datos = leer();
+        if (!datos) {
+            return sock.sendMessage(from, {
+                text: '❌ No pude leer database.json; no guardé cambios.'
+            });
+        }
 
-        // Inicialización del perfil estilo Hazbin
-        db[userId] = {
-            nombre: args[0],
-            edad: args[1],
-            registrado: true,
-            recursos: {
-                monedas: 100,      // Monedas infernales
-                gemas: 10,        // Gemas del inframundo
-                almas: 1,         // Tu propia alma
-                contratos: 0      // Contratos firmados con otros
-            },
-            inventario: {
-                waifus: [],
-                pokemons: [],
-                objetos: ["Radio Antigua"] // Objeto inicial por defecto
-            },
-            meta: { 
-                packname: "Hazbin Bot", 
-                author: "Friends Happy Bot" 
+        const anterior =
+            datos[id] && typeof datos[id] === 'object'
+                ? datos[id]
+                : {};
+
+        if (anterior.nombre) {
+            return sock.sendMessage(
+                from,
+                { text: '✅ Ya estás registrado.' },
+                { quoted: m }
+            );
+        }
+
+        try {
+            const db = obtenerBaseEconomia();
+            const users = db.data.users;
+            const clave = claveEconomia(users, usuarioOriginal, id);
+            const usuarioDb = users[clave] ||= {};
+
+            const yaRecibioBono =
+                Boolean(anterior.bonoRegistroOwner) ||
+                Boolean(usuarioDb.bonoRegistroOwner);
+
+            if (!yaRecibioBono) {
+                usuarioDb.coin = Number(usuarioDb.coin || 0) + REGALO_MONEDAS;
+                usuarioDb.exp = Number(usuarioDb.exp || 0) + REGALO_XP;
+                usuarioDb.bonoRegistroOwner = true;
+
+                try {
+                    await db.write();
+                } catch (error) {
+                    usuarioDb.coin -= REGALO_MONEDAS;
+                    usuarioDb.exp -= REGALO_XP;
+                    delete usuarioDb.bonoRegistroOwner;
+                    throw error;
+                }
             }
-        };
 
-        fs.writeFileSync('./database.json', JSON.stringify(db, null, 2));
-        
-        await conn.sendMessage(from, { 
-            text: `🎭 *¡Bienvenido al Hazbin Hotel!* 🎭\n\nTu contrato ha sido sellado, ${args[0]}.\n\nTu alma ahora es parte de nuestra colección. Disfruta de tus recursos iniciales:\n💰 Monedas: 100\n💎 Gemas: 10\n💀 Almas: 1\n📜 Contratos: 0`, 
-            quoted: m 
-        });
+            const registro = Object.assign({}, anterior, {
+                nombre,
+                fecha: anterior.fecha || new Date().toISOString()
+            });
+
+            registro.bonoRegistroOwner =
+                anterior.bonoRegistroOwner ||
+                (usuarioDb.bonoRegistroOwner
+                    ? { fecha: new Date().toISOString() }
+                    : null);
+
+            if (!registro.bonoRegistroOwner) {
+                delete registro.bonoRegistroOwner;
+            }
+
+            datos[id] = registro;
+            fs.writeFileSync(archivo, JSON.stringify(datos, null, 2));
+
+            const mensaje = yaRecibioBono
+                ? '✅ Registro guardado. El bono de bienvenida ya se había entregado; no se duplicó.'
+                : '✅ Registro guardado.\n\n🎁 Bono de bienvenida: *+50,000 monedas* y *+1,000 XP*.';
+
+            sock.__channelButtonChats = sock.__channelButtonChats || new Set();
+            sock.__channelButtonChats.add(from);
+            return sock.sendMessage(
+                from,
+                { text: mensaje },
+                { quoted: m }
+            );
+        } catch (error) {
+            console.error('Error al registrar y entregar bono:', error.message);
+
+            return sock.sendMessage(
+                from,
+                {
+                    text: '❌ No pude guardar el registro y su bono. No vuelvas a intentarlo aún; avisa al owner para revisar la base de datos.'
+                },
+                { quoted: m }
+            );
+        }
     }
 };

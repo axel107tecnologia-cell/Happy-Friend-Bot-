@@ -93,7 +93,7 @@ module.exports = {
         const usuario = m.pushName || 'Usuario';
 
         const mensaje =
-            '╭━━〔 💎 FRIENDS HAPPY BOT 〕━━╮\n' +
+            '╭━━〔 💎 🌸 𝐁𝐨𝐭 𝐌𝐚𝐭𝐢𝐤𝐚𝐧𝐞𝐭𝐚𝐧𝐧𝐡𝐚𝐮𝐬𝐞𝐫 🌸 〕━━╮\n' +
             '┃\n' +
             '┃ ⏱️ TIEMPO EN LÍNEA\n' +
             '┃ └─ ' + enLinea + '\n' +

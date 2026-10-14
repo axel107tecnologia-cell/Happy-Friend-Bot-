@@ -1,135 +1,339 @@
+'use strict';
+
 const fs = require('fs');
+const path = require('path');
+
+function normalizeJid(value) {
+    return String(value || '').replace(/:\d+(?=@)/, '').toLowerCase();
+}
+
+function asPhoneJid(value) {
+    const jid = normalizeJid(value);
+    if (jid.endsWith('@s.whatsapp.net')) return jid;
+    if (/^\+?\d{10,15}$/.test(jid)) return `${jid.replace(/\D/g, '')}@s.whatsapp.net`;
+    return null;
+}
+
+async function getMentionJid(m, sock, from) {
+    // En Baileys 7 el remitente puede llegar como LID; prioriza su PN alternativo.
+    const candidates = [
+        m?.key?.participantAlt,
+        m?.key?.remoteJidAlt,
+        m?.participantAlt,
+        m?.senderAlt,
+        m?.sender,
+        m?.key?.participant,
+        m?.participant,
+        from && !String(from).endsWith('@g.us') ? from : null
+    ].map(normalizeJid).filter(Boolean);
+
+    const phoneJid = candidates.map(asPhoneJid).find(Boolean);
+    if (phoneJid) return phoneJid;
+
+    if (String(from || '').endsWith('@g.us') && typeof sock?.groupMetadata === 'function') {
+        try {
+            const metadata = await sock.groupMetadata(from);
+            const wanted = new Set(candidates);
+            const wantedDigits = new Set(candidates.map(value => value.split('@')[0].replace(/\D/g, '')).filter(Boolean));
+            const participant = (metadata?.participants || []).find(p => {
+                const ids = [p?.id, p?.jid, p?.lid, p?.phoneNumber, p?.participantAlt]
+                    .map(normalizeJid).filter(Boolean);
+                return ids.some(id => wanted.has(id) || wantedDigits.has(id.split('@')[0].replace(/\D/g, '')));
+            });
+            const resolved = [participant?.phoneNumber, participant?.participantAlt, participant?.id, participant?.jid]
+                .map(asPhoneJid).find(Boolean);
+            if (resolved) return resolved;
+        } catch (error) {
+            console.error('[MENU] No pude resolver el PN de la mención:', error?.message || error);
+        }
+    }
+
+    // No expongas un LID en el texto si no se pudo resolver el número real.
+    return null;
+}
+
+function row(command, description = '') {
+    const rawCommand = String(command || '').trim();
+    const displayCommand = rawCommand.startsWith('.') ? rawCommand : `.${rawCommand}`;
+    return `│ ✿ *${displayCommand}*${description ? ` — ${description}` : ''}`;
+}
+
+function sector(name, subtitle, commands) {
+    return `🌸╭───〔 *SECTOR│ ${name}* 〕───╮\n` +
+        `│ _${subtitle}_\n` + commands.map(item => row(item[0], item[1])).join('\n') +
+        `\n🌸╰────────────────────╯`;
+}
 
 module.exports = {
     command: ['menu', 'help', 'ayuda'],
-
     execute: async (m, { sock, from }) => {
-        const menu =
-            '💎╭━━━〔  𝐅𝐑𝐈𝐄𝐍𝐃𝐒 𝐇𝐀𝐏𝐏𝐘 𝐁𝐎𝐓 〕━━━╮💎\n' +
-            '┃\n' +
-            '┃  💎 ✦ 𝐖𝐞𝐥𝐜𝐨𝐦𝐞 👋\n' +
-            '┃  💎 𖤐 𝐒𝐨𝐲 𝐅𝐫𝐢𝐞𝐧𝐝𝐬 𝐇𝐚𝐩𝐩𝐲 𝐁𝐨𝐭\n' +
-            '┃\n' +
-            '💎╰━━━━━━━━━━━━━━━━━━━━━━╯💎\n\n' +
+        const jid = await getMentionJid(m, sock, from);
+        const tag = jid ? `@${jid.split('@')[0]}` : (m?.pushName || 'amigo');
+        const heading =
+            `╭─〔 🌸 *𝐁𝐨𝐭 𝐌𝐚𝐭𝐢𝐤𝐚𝐧𝐞𝐭𝐚𝐧𝐧𝐡𝐚𝐮𝐬𝐞𝐫* 🌸 〕─╮\n` +
+            `│ 🌷 Hola, *${tag}*\n` +
+            `╰────────────────────────╯`;
 
-            '💎╭─〔 ⚡ 𝐁𝐎𝐓 𝐈𝐍𝐅𝐎 〕\n' +
-            '│\n' +
-            '│  🔹 𝐓𝐢𝐩𝐨 ➜ 𝐁𝐨𝐭 𝐏𝐫𝐢𝐧𝐜𝐢𝐩𝐚𝐥\n' +
-            '│  🔹 𝐒𝐢𝐬𝐭𝐞𝐦𝐚 ➜ 𝐀𝐧𝐝𝐫𝐨𝐢𝐝\n' +
-            '│  🔹 𝐏𝐫𝐞𝐟𝐢𝐣𝐨 ➜ "."\n' +
-            '│  🔹 𝐕𝐞𝐫𝐬𝐢ó𝐧 ➜ 1.5.0.1\n' +
-            '│  🔹 𝐃𝐞𝐯 ➜ 𝐀𝐱𝐞𝐥 𝐀.\n' +
-            '│  🔹 ".owner" ➜ 𝐃𝐚𝐭𝐨𝐬 𝐝𝐞𝐥 𝐝𝐞𝐬𝐚𝐫𝐫𝐨𝐥𝐥𝐚𝐝𝐨𝐫\n' +
-            '│\n' +
-            '💎╰──────────────────────\n\n' +
+        const info =
+            `🌷╭───〔 *INFORMACIÓN* 〕───╮\n` +
+            `│ ✿ Tipo: Bot principal\n` +
+            `│ ✿ Sistema: Android\n` +
+            `│ ✿ Usuario: ${tag}\n` +
+            `│ ✿ Prefijo: .\n` +
+            `│ ✿ Desarrollador: Axel A.\n` +
+            `│ 📣 Ver Canal: al final del menú\n` +
+            `🌷╰──────────────────────╯`;
 
-            '👑╭─〔 𝐎𝐖𝐍𝐄𝐑 〕\n' +
-            '│\n' +
-            '│  🖼️ ".setbanner" ➜ 𝐂𝐚𝐦𝐛𝐢𝐚𝐫 𝐢𝐦𝐚𝐠𝐞𝐧 𝐝𝐞𝐥 𝐦𝐞𝐧ú\n' +
-            '│  ✏️ ".setname" ➜ 𝐂𝐚𝐦𝐛𝐢𝐚𝐫 𝐧𝐨𝐦𝐛𝐫𝐞 𝐝𝐞𝐥 𝐛𝐨𝐭\n' +
-            '│\n' +
-            '👑╰──────────────────────\n\n' +
+        const sections = [
+            sector('OWNER', 'Comandos del propietario', [
+                ['setbanner', 'Cambiar imagen del menú'],
+                ['setname', 'Cambiar nombre del bot'],
+                ['kickall', 'Expulsar a todos los integrantes'],
+                ['chetar', 'Asignar recursos'],
+                ['deschetar', 'Restablecer recursos'],
+                ['invite / .join', 'Unir el bot usando una invitación'],
+                ['salir / .leave', 'Hacer que el bot salga del grupo'],
+                ['quitarcoin @usuario <cantidad>', 'Quitar MatikaCoins']
+            ]),
 
-            '💎╭─〔 🏠 𝐈𝐍𝐈𝐂𝐈𝐎 〕\n' +
-            '│\n' +
-            '│  💎 ".menu" ➜ 𝐌𝐞𝐧ú 𝐩𝐫𝐢𝐧𝐜𝐢𝐩𝐚𝐥\n' +
-            '│  🔐 ".delsesion" ➜ 𝐂𝐞𝐫𝐫𝐚𝐫 𝐬𝐮𝐛-𝐛𝐨𝐭 𝐩𝐫𝐨𝐩𝐢𝐨\n' +
-            '│  💎 ".ping" ➜ 𝐄𝐬𝐭𝐚𝐝𝐨 𝐝𝐞𝐥 𝐛𝐨𝐭\n' +
-            '│  💎 ".info" ➜ 𝐈𝐧𝐟𝐨𝐫𝐦𝐚𝐜𝐢ó𝐧 𝐝𝐞𝐥 𝐛𝐨𝐭\n' +
-            '│  💎 ".autoadmin" ➜ 𝐀𝐮𝐭𝐨 𝐚𝐝𝐦𝐢𝐧𝐢𝐬𝐭𝐫𝐚𝐝𝐨𝐫\n' +
-            '│\n' +
-            '💎╰──────────────────────\n\n' +
+            sector('HOME', 'Inicio e información', [
+                ['reg <nombre.edad>', 'Registrarte'],
+                ['unreg', 'Eliminar tu registro'],
+                ['menu / .help / .ayuda', 'Mostrar este menú'],
+                ['owner', 'Datos del desarrollador'],
+                ['info', 'Información del bot'],
+                ['ping', 'Estado del bot'],
+                ['autoadmin', 'Auto administrador'],
+                ['delsesion', 'Cerrar tu subbot']
+            ]),
 
-            '💎╭─〔 🎧 𝐌𝐄𝐃𝐈𝐀 〕\n' +
-            '│\n' +
-            '│  🔹 ".play" ➜ 𝐃𝐞𝐬𝐜𝐚𝐫𝐠𝐚𝐫 𝐦ú𝐬𝐢𝐜𝐚\n' +
-            '│  🔹 ".play2" ➜ 𝐃𝐞𝐬𝐜𝐚𝐫𝐠𝐚𝐫 𝐯𝐢𝐝𝐞𝐨\n' +
-            '│  🔹 ".spotify" ➜ 𝐃𝐞𝐬𝐜𝐚𝐫𝐠𝐚𝐫 𝐚𝐮𝐝𝐢𝐨\n' +
-            '│  🔹 ".ig / .instagram" ➜ 𝐕í𝐝𝐞𝐨 𝐝𝐞 𝐈𝐧𝐬𝐭𝐚𝐠𝐫𝐚𝐦\n' +
-            '│  🔹 ".fb / .facebook" ➜ 𝐕í𝐝𝐞𝐨 𝐝𝐞 𝐅𝐚𝐜𝐞𝐛𝐨𝐨𝐤\n' +
-            '│  🔹 ".tiktok" ➜ 𝐃𝐞𝐬𝐜𝐚𝐫𝐠𝐚𝐫 𝐓𝐢𝐤𝐓𝐨𝐤\n' +
-            '│  🔹 ".pin / .pinterest" ➜ 𝐁𝐮𝐬𝐜𝐚𝐫 𝐡𝐚𝐬𝐭𝐚 𝟏𝟎 𝐢𝐦á𝐠𝐞𝐧𝐞𝐬\n' +
-            '│\n' +
-            '💎╰──────────────────────\n\n' +
+            sector('ECONOMY', 'Comandos de economía', [
+                ['trabajar', 'Ganar MatikaCoins'],
+                ['minar', 'Conseguir MatikaCoins y XP (15 min)'],
+                ['pescar', 'Conseguir MatikaCoins y XP (15 min)'],
+                ['minar', 'Conseguir MatikaCoins y XP (15 min)'],
+                ['pescar', 'Conseguir MatikaCoins y XP (15 min)'],
+                ['semanal', 'Reclamar regalo semanal'],
+                ['bank', 'Ver saldo y comandos'],
+                ['perfil', 'Ver perfil y MatikaCoins'],
+                ['depositar <cantidad>', 'Guardar MatikaCoins en el banco'],
+                ['d all', 'Depositar todo el efectivo en el banco'],
+                ['retirar <cantidad>', 'Retirar MatikaCoins del banco'],
+                ['transferir <cantidad> @usuario', 'Transferir MatikaCoins'],
+                ['buy <cantidad>', 'Comprar MatikaCoins con XP'],
+                ['slot <cantidad>', 'Apostar XP'],
+                ['ruleta <cantidad> rojo/negro/verde/verde', 'Jugar ruleta'],
+                ['robar @usuario', 'Intentar robar MatikaCoins'],
+                ['robxp @usuario', 'Intentar robar XP']
+            ]),
 
-            '💎╭─〔 🎨 𝐒𝐓𝐈𝐂𝐊𝐄𝐑𝐒 〕\n' +
-            '│\n' +
-            '│  💎 ".sticker" ➜ 𝐂𝐫𝐞𝐚𝐫 𝐬𝐭𝐢𝐜𝐤𝐞𝐫\n' +
-            '│  💎 ".sticker2" ➜ 𝐂𝐫𝐞𝐚𝐫 𝐬𝐭𝐢𝐜𝐤𝐞𝐫 𝟐\n' +
-            '│\n' +
-            '💎╰──────────────────────\n\n' +
+            sector('LEVELS', 'Nivel y experiencia', [
+                ['levelup', 'Consultar nivel y rango'],
+                ['lvl', 'Alias de nivel'],
+                ['nivel', 'Alias de nivel']
+            ]),
 
-            '💎╭─〔 👥 𝐆𝐑𝐔𝐏𝐎𝐒 〕\n' +
-            '│\n' +
-            '│  🔹 ".setmeta" ➜ 𝐂𝐚𝐦𝐛𝐢𝐚𝐫 𝐦𝐞𝐭𝐚\n' +
-            '│  🔹 ".setdesc" ➜ 𝐂𝐚𝐦𝐛𝐢𝐚𝐫 𝐝𝐞𝐬𝐜𝐫𝐢𝐩𝐜𝐢ó𝐧\n' +
-            '│  🔹 ".kick" ➜ 𝐄𝐱𝐩𝐮𝐥𝐬𝐚𝐫 𝐮𝐬𝐮𝐚𝐫𝐢𝐨\n' +
-            '│  🔹 ".promote" ➜ 𝐃𝐚𝐫 𝐚𝐝𝐦𝐢𝐧𝐢𝐬𝐭𝐫𝐚𝐝𝐨𝐫\n' +
-            '│  🔹 ".demote" ➜ 𝐐𝐮𝐢𝐭𝐚𝐫 𝐚𝐝𝐦𝐢𝐧𝐢𝐬𝐭𝐫𝐚𝐝𝐨𝐫\n' +
-            '│  🔹 ".welcome on/off" ➜ 𝐀𝐜𝐭𝐢𝐯𝐚𝐫 𝐛𝐢𝐞𝐧𝐯𝐞𝐧𝐢𝐝𝐚\n' +
-            '│  🔹 ".bye on/off" ➜ 𝐀𝐜𝐭𝐢𝐯𝐚𝐫 𝐝𝐞𝐬𝐩𝐞𝐝𝐢𝐝𝐚\n' +
-            '│  🔹 ".setwelcome" ➜ 𝐂𝐚𝐦𝐛𝐢𝐚𝐫 𝐦𝐞𝐧𝐬𝐚𝐣𝐞 𝐝𝐞 𝐛𝐢𝐞𝐧𝐯𝐞𝐧𝐢𝐝𝐚\n' +
-            '│  🔹 ".setbye" ➜ 𝐂𝐚𝐦𝐛𝐢𝐚𝐫 𝐦𝐞𝐧𝐬𝐚𝐣𝐞 𝐝𝐞 𝐝𝐞𝐬𝐩𝐞𝐝𝐢𝐝𝐚\n' +
-            '│\n' +
-            '💎╰──────────────────────\n\n' +
+            sector('POKÉMON', 'Aventura y colección', [
+                ['pokemon', 'Encontrar un Pokémon salvaje'],
+                ['pkatrapar <bola>', 'Intentar atrapar un Pokémon'],
+                ['pokemones', 'Ver Pokémon capturados'],
+                ['pkinv', 'Ver inventario Pokémon'],
+                ['pktienda', 'Abrir tienda Pokémon'],
+                ['pkaventura', 'Iniciar aventura'],
+                ['pkvender', 'Vender un Pokémon'],
+                ['pkcurar', 'Curar un Pokémon'],
+                ['pkevolucionar', 'Evolucionar un Pokémon']
+            ]),
 
-            '💎╭─〔 👑 𝐀𝐃𝐌𝐈𝐍𝐈𝐒𝐓𝐑𝐀𝐃𝐎𝐑 〕\n' +
-            '│\n' +
-            '│  💎 ".grupocerrar" ➜ 𝐂𝐞𝐫𝐫𝐚𝐫 𝐠𝐫𝐮𝐩𝐨\n' +
-            '│  💎 ".grupoabrir" ➜ 𝐀𝐛𝐫𝐢𝐫 𝐠𝐫𝐮𝐩𝐨\n' +
-            '│  💎 ".antilink on/off" ➜ 𝐀𝐧𝐭𝐢𝐥𝐢𝐧𝐤\n' +
-            '│  💎 ".del" ➜ 𝐁𝐨𝐫𝐫𝐚𝐫 𝐦𝐞𝐧𝐬𝐚𝐣𝐞\n' +
-            '│  💎 ".tagall" ➜ 𝐌𝐞𝐧𝐜𝐢𝐨𝐧𝐚𝐫 𝐚 𝐭𝐨𝐝𝐨𝐬\n' +
-            '│  💎 ".nsfw on/off" ➜ 𝐌𝐨𝐝𝐨 +𝟏𝟖\n' +
-            '│  💎 Aviso automático al dar o quitar administrador\n' +
-            '│\n' +
-            '💎╰──────────────────────\n\n' +
+            sector('GACHA', 'Personajes y waifus', [
+                ['rw', 'Mostrar personaje aleatorio'],
+                ['claim / .c', 'Reclamar personaje; responde a su tarjeta'],
+                ['harem', 'Ver personajes reclamados'],
+                ['regalar <nombre> @usuario', 'Regalar personaje'],
+                ['robarwaifu <nombre o ID>', 'Intentar robar personaje'],
+                ['comprartoken / .buytoken', 'Comprar token de protección'],
+                ['proteccion', 'Proteger personaje'],
+                ['tokenall', 'Proteger todos; cobra MatikaCoins'],
+                ['wimage <nombre>', 'Buscar imagen del personaje'],
+                ['winfo <nombre>', 'Ver información del personaje']
+            ]),
 
-            '💎╭─〔 🧠 𝐈𝐀 〕\n' +
-            '│\n' +
-            '│  🔹 ".ia (pregunta)" ➜ 𝐇𝐚𝐛𝐥𝐚𝐫 𝐜𝐨𝐧 𝐆𝐞𝐦𝐢𝐧𝐢\n' +
-            '│\n' +
-            '💎╰──────────────────────\n\n' +
+            sector('GROUP', 'Comandos para administrar grupos', [
+                ['antilink on/off', 'Bloquear invitaciones de WhatsApp'],
+                ['antilink2 on/off', 'Bloquear enlaces externos; permite YouTube'],
+                ['adminnotify', 'Avisos automáticos al dar o quitar administrador'],
+                ['link', 'Obtener enlace de invitación del grupo'],
+                ['del', 'Borrar mensaje citado'],
+                ['grupocerrar', 'Cerrar el grupo'],
+                ['grupoabrir', 'Abrir el grupo'],
+                ['kick @usuario', 'Expulsar usuario'],
+                ['promote @usuario', 'Dar administrador'],
+                ['demote @usuario', 'Quitar administrador'],
+                ['setmeta', 'Cambiar metadatos del grupo'],
+                ['setdesc', 'Cambiar descripción del grupo'],
+                ['welcome on/off', 'Activar bienvenida'],
+                ['bye on/off', 'Activar despedida'],
+                ['setwelcome', 'Configurar bienvenida'],
+                ['setbye', 'Configurar despedida'],
+                ['warn @usuario motivo', 'Advertir usuario'],
+                ['warnings @usuario', 'Ver advertencias'],
+                ['delwarn @usuario', 'Eliminar advertencia'],
+                ['unwarn @usuario', 'Quitar advertencia'],
+                ['listadv / .listaadv', 'Ver advertencias del grupo'],
+                ['mute @usuario', 'Silenciar a un integrante'],
+                ['unmute @usuario', 'Permitirle hablar de nuevo'],
+                ['antibot2 on/off', 'Salida del subbot si está el principal'],
+                ['autoaudio on/off', 'Responder con audios por palabras clave'],
+                ['autorechazar on/off', 'Rechazar solicitudes por prefijo'],
+                ['autoaceptar on/off', 'Aceptar solicitudes cuyo número inicia en 5'],
+                ['tagall', 'Mencionar integrantes']
+            ]),
 
-            '🔞╭─〔 𝐍𝐒𝐅𝐖 +𝟏𝟖 〕\n' +
-            '│\n' +
-            '│  🔥 ".cum" ➜ 𝐂𝐨𝐧𝐭𝐞𝐧𝐢𝐝𝐨 𝐍𝐒𝐅𝐖\n' +
-            '│  🔐 Activa con ".nsfw on"\n' +
-            '│\n' +
-            '🔞╰──────────────────────\n\n' +
+            sector('SOCIAL', 'Parejas, sorteos y diversión', [
+                ['formarpareja', 'Formar una pareja aleatoria'],
+                ['formarpareja5', 'Mostrar cinco parejas aleatorias'],
+                ['ship nombre1 nombre2', 'Calcular compatibilidad'],
+                ['piropo', 'Enviar un piropo SFW'],
+                ['sorteo <premio>', 'Sortear un premio'],
+                ['marry @usuario', 'Proponer matrimonio'],
+                ['divorce', 'Divorciarse'],
+                ['baltop', 'Ver el top de MatikaCoins']
+            ]),
 
-            '💎╭─〔 🤖 𝐒𝐘𝐒𝐓𝐄𝐌 〕\n' +
-            '│\n' +
-            '│  💎 ".restart" ➜ 𝐑𝐞𝐢𝐧𝐢𝐜𝐢𝐚𝐫 𝐛𝐨𝐭\n' +
-            '│  💎 ".code / .serbot" ➜ 𝐂ó𝐝𝐢𝐠𝐨 𝐝𝐞 𝐜𝐨𝐧𝐞𝐱𝐢ó𝐧\n' +
-            '│  💎 ".subbots" ➜ 𝐆𝐞𝐬𝐭𝐢𝐨𝐧𝐚𝐫 𝐬𝐮𝐛𝐛𝐨𝐭𝐬\n' +
-            '│  💎 ".bot on / .bot off" ➜ 𝐀𝐜𝐭𝐢𝐯𝐚𝐫 𝐨 𝐚𝐩𝐚𝐠𝐚𝐫 𝐛𝐨𝐭𝐬\n' +
-            '│\n' +
-            '💎╰──────────────────────\n\n' +
+            sector('MEDIA', 'Música, videos e imágenes', [
+                ['play', 'Buscar música o video y elegir formato'],
+                ['pfp @usuario', 'Ver foto de perfil'],
+                ['togifaud', 'Enviar un video como GIF'],
+                ['spotify', 'Buscar audio'],
+                ['ig / .instagram', 'Descargar Instagram'],
+                ['fb / .facebook', 'Descargar Facebook'],
+                ['tiktok', 'Descargar TikTok'],
+                ['mediafire <url>', 'Descargar un archivo de MediaFire'],
+                ['apk <app>', 'Buscar y enviar APK desde Aptoide'],
+                ['pin / .pinterest', 'Buscar imágenes en Pinterest']
+            ]),
 
-            '💎╭━━━━━━━━━━━━━━━━━━━━━━╮\n' +
-            '│  💎 𝐏𝐎𝐖𝐄𝐑𝐄𝐃 𝐁𝐘 𝐀𝐗𝐄𝐋 𝐀.\n' +
-            '│  💎 ✦ 𝐅𝐫𝐢𝐞𝐧𝐝𝐬 𝐇𝐚𝐩𝐩𝐲 𝐁𝐨𝐭\n' +
-            '💎╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n' +
-            '💎 «⚠️ 𝐄𝐬𝐜𝐫𝐢𝐛𝐞 𝐥𝐨𝐬 𝐜𝐨𝐦𝐚𝐧𝐝𝐨𝐬 𝐮𝐬𝐚𝐧𝐝𝐨 𝐞𝐥 𝐩𝐫𝐞𝐟𝐢𝐣𝐨 "."»';
+            sector('ANIME', 'Reacciones', [
+                ['angry', ''], ['bath', ''], ['bite', ''], ['bleh', ''],
+                ['blush', ''], ['bored', ''], ['clap', ''], ['coffee', ''],
+                ['cry', ''], ['cuddle', ''], ['dance', ''], ['drunk', ''],
+                ['eat', ''], ['facepalm', ''], ['happy', ''], ['hug', ''],
+                ['kill', ''], ['kiss', ''], ['laugh', ''], ['lick', ''],
+                ['love', ''], ['pat', ''], ['poke', ''], ['pout', ''],
+                ['punch', ''], ['run', ''], ['sad', ''], ['scared', ''],
+                ['shy', ''], ['slap', ''], ['sleep', ''], ['smoke', ''],
+                ['think', '']
+            ]),
 
-        const fotoMenu = '/sdcard/Download/menu.jpg';
+            sector('STICKERS', 'Crear y personalizar stickers', [
+                ['sticker', 'Crear sticker'],
+                ['HD <imagen>', 'Mejorar calidad de imagen'],
+                ['sticker2', 'Crear sticker 2'],
+                ['stickersearch <tema>', 'Buscar paquetes en Sticker.ly'],
+                ['s', 'Crear sticker personalizado'],
+                ['brat <texto>', 'Crear sticker Brat con texto negro sobre fondo blanco'],
+            ]),
 
-        if (fs.existsSync(fotoMenu)) {
-            await sock.sendMessage(
-                from,
-                {
-                    image: fs.readFileSync(fotoMenu),
-                    caption: menu
-                },
-                { quoted: m }
-            );
-        } else {
-            await sock.sendMessage(
-                from,
-                { text: menu },
-                { quoted: m }
-            );
+            sector('WARNINGS & UTILS', 'Advertencias y utilidades', [
+                ['afk <motivo>', 'Activar modo ausente'],
+                ['read', 'Recuperar mensaje de una sola vista'],
+                ['toimg', 'Convertir a imagen'],
+                ['report <problema>', 'Enviar reporte con tu número y enlace de contacto'],
+                ['admins <texto>', 'Avisar a los administradores del grupo'],
+                ['tiktoksearch <tema>', 'Buscar videos en TikTok'],
+                ['youtubesearch <tema>', 'Buscar videos en YouTube'],
+                ['randomplay', 'Enviar canción aleatoria de YouTube'],
+                ['top <tema>', 'Crear top aleatorio']
+            ]),
+
+            sector('SYSTEM', 'Subbots y sistema', [
+                ['code / serbot', 'Código de conexión'],
+                ['subbots', 'Gestionar subbots'],
+                ['.genpremium 30d', 'Generar código premium (owner)'],
+                ['.premium <código>', 'Canjear premium en privado'],
+                ['.premiuminfo', 'Ver vigencia premium'],
+                ['restart', 'Reiniciar bot'],
+                ['bot on/off', 'Activar o apagar bots']
+            ]),
+
+            sector('IA', 'Inteligencia artificial', [
+                ['ia <pregunta>', 'Hablar con Gemini'],
+                ['mambo <mensaje>', 'Hablar con Mambo'],
+            ])
+        ];
+
+        const text = `${heading}\n${info}\n\n${sections.join('\n\n')}\n\n` +
+            `🌸━━━━━━━━━━━━━━━━━━━━🌸\n` +
+            `*𝐁𝐨𝐭 𝐌𝐚𝐭𝐢𝐤𝐚𝐧𝐞𝐭𝐚𝐧𝐧𝐡𝐚𝐮𝐬𝐞𝐫* · Powered by Ao Ork\n` +
+            `🌸━━━━━━━━━━━━━━━━━━━━🌸\n\n` +
+            `⚠️ Usa los comandos con el prefijo .\n\n📣 *Ver Canal:*\nhttps://whatsapp.com/channel/0029VbD53WDGZNCqmpU0zY0E`;
+
+        const animatedBanner = path.join(__dirname, 'menu-banner.mp4');
+        const customImage = ['jpg', 'jpeg', 'png', 'webp']
+            .map(ext => path.join(__dirname, `menu-banner.${ext}`))
+            .find(file => fs.existsSync(file));
+        const fallbackImage = '/sdcard/Download/menu.jpg';
+        const mentions = jid ? [jid] : [];
+        const caption = '🌸 𝐁𝐨𝐭 𝐌𝐚𝐭𝐢𝐤𝐚𝐧𝐞𝐭𝐚𝐧𝐧𝐡𝐚𝐮𝐬𝐞𝐫 🌸 — Powered by Ao Ork';
+
+        let bannerSent = false;
+        if (fs.existsSync(animatedBanner)) {
+            try {
+                await sock.sendMessage(from, {
+                    video: fs.readFileSync(animatedBanner),
+                    gifPlayback: true,
+                    caption
+                }, { quoted: m });
+                bannerSent = true;
+            } catch (error) {
+                console.error('[MENU] Falló el banner animado; intentaré la imagen fija:', error?.message || error);
+            }
+        }
+
+        if (!bannerSent) {
+            const imagePath = customImage || fallbackImage;
+            if (fs.existsSync(imagePath)) {
+                try {
+                    await sock.sendMessage(from, {
+                        image: fs.readFileSync(imagePath),
+                        mimetype: 'image/jpeg',
+                        caption
+                    }, { quoted: m });
+                    bannerSent = true;
+                } catch (error) {
+                    console.error('[MENU] Falló la imagen del menú; enviaré solo el texto:', error?.message || error);
+                }
+            }
+        }
+
+        // Pausa breve entre el banner y el menú; el enlace va al final del mismo texto.
+        await new Promise(resolve => setTimeout(resolve, 2500));
+
+        // Enviar el menú con un CTA URL real y conservar la URL visible al final.
+        const channelUrl = 'https://whatsapp.com/channel/0029VbD53WDGZNCqmpU0zY0E';
+        try {
+            const helperBotones = await import('zqbaileys_helper');
+            const sendButtons =
+                helperBotones.sendButtons || helperBotones.default?.sendButtons;
+            if (typeof sendButtons !== 'function') {
+                throw new Error('El helper no exporta sendButtons');
+            }
+            await sendButtons(sock, from, {
+                title: '🌸 𝐁𝐨𝐭 𝐌𝐚𝐭𝐢𝐤𝐚𝐧𝐞𝐭𝐚𝐧𝐧𝐡𝐚𝐮𝐬𝐞𝐫 🌸',
+                text,
+                mentions,
+                footer: 'Canal oficial de 🌸 𝐁𝐨𝐭 𝐌𝐚𝐭𝐢𝐤𝐚𝐧𝐞𝐭𝐚𝐧𝐧𝐡𝐚𝐮𝐬𝐞𝐫 🌸',
+                buttons: [{
+                    name: 'cta_url',
+                    buttonParamsJson: JSON.stringify({
+                        display_text: 'Ver Canal',
+                        url: channelUrl
+                    })
+                }]
+            });
+        } catch (error) {
+            console.error('[MENU] No pude enviar el botón URL; mandaré el menú normal:', error?.message || error);
+            await sock.sendMessage(from, { text, mentions }, { quoted: m });
         }
     }
 };

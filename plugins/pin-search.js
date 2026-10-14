@@ -1,64 +1,144 @@
-const fs = require('fs');
-const path = require('path');
-const { execFile } = require('child_process');
-const { promisify } = require('util');
-const run = promisify(execFile);
+'use strict';
+
 const {
     generateWAMessageContent,
     generateWAMessageFromContent,
     proto
 } = require('@whiskeysockets/baileys');
 
-const PIN_URL = /https?:\/\/(?:www\.)?(?:pin\.it|pinterest\.[^/]+)\//i;
+const API_PINTEREST = 'https://ellen-api-three.vercel.app/api/pinterest';
 
-const ENDPOINT =
-    'https://id.pinterest.com/resource/BaseSearchResource/get/';
+function extraerEnlacePinterest(texto) {
+    const coincidencia = String(texto || '').match(/https?:\/\/[^\s]+/i);
+    if (!coincidencia) return null;
 
-async function buscarPinterest(texto) {
-    const apiKey = process.env.SERPAPI_KEY;
+    const candidata = coincidencia[0].replace(/[),.;!?]+$/g, '');
 
-    if (!apiKey) {
-        throw new Error(
-            'Falta configurar SERPAPI_KEY en Termux.'
-        );
+    try {
+        const url = new URL(candidata);
+        const host = url.hostname.toLowerCase();
+
+        const valido =
+            host === 'pin.it' ||
+            host.endsWith('.pin.it') ||
+            host === 'pinterest.com' ||
+            host.endsWith('.pinterest.com') ||
+            /^pinterest\.[a-z.]+$/.test(host);
+
+        return valido ? url.toString() : null;
+    } catch {
+        return null;
+    }
+}
+
+async function pedirJson(endpoint, contenido) {
+    const respuesta = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(contenido)
+    });
+
+    const texto = await respuesta.text();
+    let datos;
+
+    try {
+        datos = JSON.parse(texto);
+    } catch {
+        throw new Error('Respuesta de búsqueda inválida.');
     }
 
-    const url =
-        'https://serpapi.com/search?engine=google_images' +
-        '&q=' + encodeURIComponent(texto) +
-        '&num=10' +
-        '&safe=active' +
-        '&api_key=' + encodeURIComponent(apiKey);
+    if (!respuesta.ok || datos.success === false) {
+        throw new Error('La búsqueda no está disponible.');
+    }
 
-    const respuesta = await fetch(url);
+    return datos;
+}
+
+async function descargarImagen(url) {
+    const respuesta = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+    });
 
     if (!respuesta.ok) {
-        throw new Error(
-            'SerpApi respondió HTTP ' + respuesta.status
-        );
+        throw new Error('No se pudo cargar una imagen.');
     }
 
-    const json = await respuesta.json();
+    const tipo = String(respuesta.headers.get('content-type') || '')
+        .toLowerCase();
 
-    const resultados = (json.images_results || [])
-        .filter(item =>
-            item.original ||
-            item.thumbnail
-        )
-        .slice(0, 10)
-        .map(item => ({
-            titulo: item.title || 'Imagen',
-            descripcion: item.source || 'Google Imágenes',
-            imagen: item.original || item.thumbnail
-        }));
-
-    if (!resultados.length) {
-        throw new Error(
-            'SerpApi no encontró imágenes.'
-        );
+    if (!tipo.startsWith('image/')) {
+        throw new Error('El enlace no contiene una imagen.');
     }
 
-    return resultados;
+    const longitud = Number(respuesta.headers.get('content-length') || 0);
+    if (longitud > 15 * 1024 * 1024) {
+        throw new Error('La imagen supera el tamaño permitido.');
+    }
+
+    const buffer = Buffer.from(await respuesta.arrayBuffer());
+
+    if (!buffer.length) {
+        throw new Error('La imagen está vacía.');
+    }
+
+    return buffer;
+}
+
+function obtenerAtributo(tag, nombre) {
+    const expresion = new RegExp(
+        "\\b" + nombre + "\\s*=\\s*(['\"])(.*?)\\1",
+        'i'
+    );
+    const coincidencia = tag.match(expresion);
+
+    return coincidencia
+        ? coincidencia[2]
+            .replace(/&amp;/g, '&')
+            .replace(/&quot;/g, '"')
+        : '';
+}
+async function extraerImagenDelPin(enlace) {
+    const respuesta = await fetch(enlace, {
+        redirect: 'follow',
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+    });
+
+    if (!respuesta.ok) {
+        throw new Error('No se pudo abrir ese pin.');
+    }
+
+    const html = await respuesta.text();
+    const etiquetas = html.match(/<meta\b[^>]*>/gi) || [];
+
+    let imagenUrl = '';
+    let titulo = 'Pinterest';
+
+    for (const etiqueta of etiquetas) {
+        const propiedad =
+            obtenerAtributo(etiqueta, 'property') ||
+            obtenerAtributo(etiqueta, 'name');
+
+        const contenido = obtenerAtributo(etiqueta, 'content');
+
+        if (propiedad.toLowerCase() === 'og:image' && contenido) {
+            imagenUrl = contenido;
+        }
+
+        if (propiedad.toLowerCase() === 'og:title' && contenido) {
+            titulo = contenido;
+        }
+    }
+
+    if (!imagenUrl) {
+        throw new Error('Ese pin no tiene una imagen pública disponible.');
+    }
+
+    const imagenCompleta = new URL(imagenUrl, respuesta.url).toString();
+
+    return {
+        imagen: await descargarImagen(imagenCompleta),
+        titulo
+    };
 }
 
 module.exports = {
@@ -67,90 +147,12 @@ module.exports = {
     execute: async (m, { sock, from, args }) => {
         const busqueda = args.join(' ').trim();
 
-        if (PIN_URL.test(busqueda)) {
-            let archivo;
-
-            try {
-                await sock.sendMessage(from, {
-                    react: {
-                        text: '⌛',
-                        key: m.key
-                    }
-                });
-
-                archivo = await descargarPin(busqueda);
-                const extension = path.extname(archivo)
-                    .toLowerCase();
-
-                const contenido = fs.readFileSync(archivo);
-
-                if (['.jpg', '.jpeg', '.png', '.webp'].includes(extension)) {
-                    await sock.sendMessage(
-                        from,
-                        {
-                            image: contenido,
-                            caption: '📌 Pinterest'
-                        },
-                        { quoted: m }
-                    );
-                } else {
-                    await sock.sendMessage(
-                        from,
-                        {
-                            video: contenido,
-                            mimetype: 'video/mp4',
-                            caption: '📌 Pinterest'
-                        },
-                        { quoted: m }
-                    );
-                }
-
-                await sock.sendMessage(from, {
-                    react: {
-                        text: '✅',
-                        key: m.key
-                    }
-                });
-            } catch (error) {
-                console.error(
-                    'Error en enlace Pinterest:',
-                    error.message
-                );
-
-                await sock.sendMessage(from, {
-                    react: {
-                        text: '❌',
-                        key: m.key
-                    }
-                }).catch(() => {});
-
-                await sock.sendMessage(
-                    from,
-                    {
-                        text:
-                            '⚠️ No pude descargar ese Pin. ' +
-                            'Prueba con un enlace público.'
-                    },
-                    { quoted: m }
-                );
-            } finally {
-                if (archivo) {
-                    fs.unlink(
-                        archivo,
-                        () => {}
-                    );
-                }
-            }
-
-            return;
-        }
-
         if (!busqueda) {
             return sock.sendMessage(
                 from,
                 {
                     text:
-                        '📌 Escribe lo que quieres buscar.\n\n' +
+                        '📌 Escribe qué imagen quieres buscar.\n\n' +
                         '.pin fondos azules'
                 },
                 { quoted: m }
@@ -159,135 +161,133 @@ module.exports = {
 
         try {
             await sock.sendMessage(from, {
-                react: {
-                    text: '⌛',
-                    key: m.key
-                }
+                react: { text: '⌛', key: m.key }
             });
 
-            const resultados = await buscarPinterest(busqueda);
-            const seleccion = resultados.slice(0, 10);
-            const tarjetas = [];
+            const enlace = extraerEnlacePinterest(busqueda);
 
-            for (const resultado of seleccion) {
-                const respuestaImagen = await fetch(
-                    resultado.imagen
+            if (enlace) {
+                const pin = await extraerImagenDelPin(enlace);
+
+                await sock.sendMessage(
+                    from,
+                    {
+                        image: pin.imagen,
+                        caption: '📌 ' + pin.titulo
+                    },
+                    { quoted: m }
                 );
-
-                if (!respuestaImagen.ok) {
-                    continue;
-                }
-
-                const imagenBuffer = Buffer.from(
-                    await respuestaImagen.arrayBuffer()
-                );
-
-                const imagenMessage =
-                    await generateWAMessageContent(
-                        {
-                            image: imagenBuffer
-                        },
-                        {
-                            upload: sock.waUploadToServer
-                        }
-                    );
-
-                tarjetas.push({
-                    body: proto.Message.InteractiveMessage.Body.fromObject({
-                        text: resultado.titulo || 'Imagen encontrada'
-                    }),
-
-                    footer: proto.Message.InteractiveMessage.Footer.fromObject({
-                        text: 'Friends Happy Bot'
-                    }),
-
-                    header: proto.Message.InteractiveMessage.Header.fromObject({
-                        hasMediaAttachment: true,
-                        imageMessage: imagenMessage.imageMessage
-                    }),
-
-                    nativeFlowMessage:
-                        proto.Message.InteractiveMessage.NativeFlowMessage.fromObject({
-                            buttons: []
-                        })
+            } else {
+                const resultado = await pedirJson(API_PINTEREST, {
+                    query: busqueda
                 });
-            }
 
-            if (!tarjetas.length) {
-                throw new Error(
-                    'No se encontraron imágenes disponibles'
+                const seleccion = Array.isArray(resultado.items)
+                    ? resultado.items.slice(0, 10)
+                    : [];
+
+                const tarjetas = [];
+
+                for (const item of seleccion) {
+                    const imagenUrl = item.image || item.image_small;
+                    if (!imagenUrl) continue;
+
+                    try {
+                        const imagenBuffer = await descargarImagen(imagenUrl);
+                        const imagenMensaje = await generateWAMessageContent(
+                            { image: imagenBuffer },
+                            { upload: sock.waUploadToServer }
+                        );
+
+                        tarjetas.push({
+                            body: proto.Message.InteractiveMessage.Body.fromObject({
+                                text: String(item.title || item.desc || 'Imagen de Pinterest')
+                                    .slice(0, 180)
+                            }),
+
+                            footer: proto.Message.InteractiveMessage.Footer.fromObject({
+                                text: '🌸 𝐁𝐨𝐭 𝐌𝐚𝐭𝐢𝐤𝐚𝐧𝐞𝐭𝐚𝐧𝐧𝐡𝐚𝐮𝐬𝐞𝐫 🌸'
+                            }),
+
+                            header: proto.Message.InteractiveMessage.Header.fromObject({
+                                hasMediaAttachment: true,
+                                imageMessage: imagenMensaje.imageMessage
+                            }),
+
+                            nativeFlowMessage:
+                                proto.Message.InteractiveMessage.NativeFlowMessage.fromObject({
+                                    buttons: []
+                                })
+                        });
+                    } catch (errorImagen) {
+                        console.error(
+                            'No se pudo cargar una imagen de Pinterest:',
+                            errorImagen.message
+                        );
+                    }
+                }
+
+                if (!tarjetas.length) {
+                    throw new Error('No se encontraron imágenes disponibles.');
+                }
+
+                const textoCarrusel =
+                    '╭━━〔 📌 PINTEREST 〕━━╮\n' +
+                    '┃\n' +
+                    '┃ 🔎 Búsqueda: ' + busqueda + '\n' +
+                    '┃ 🖼️ Resultados: ' + tarjetas.length + '\n' +
+                    '┃\n' +
+                    '╰━━━━━━━━━━━━━━━━╯';
+
+                const carrusel = generateWAMessageFromContent(
+                    from,
+                    {
+                        viewOnceMessage: {
+                            message: {
+                                interactiveMessage:
+                                    proto.Message.InteractiveMessage.fromObject({
+                                        body:
+                                            proto.Message.InteractiveMessage.Body.fromObject({
+                                                text: textoCarrusel
+                                            }),
+
+                                        footer:
+                                            proto.Message.InteractiveMessage.Footer.fromObject({
+                                                text: '🌸 𝐁𝐨𝐭 𝐌𝐚𝐭𝐢𝐤𝐚𝐧𝐞𝐭𝐚𝐧𝐧𝐡𝐚𝐮𝐬𝐞𝐫 🌸'
+                                            }),
+
+                                        carouselMessage:
+                                            proto.Message.InteractiveMessage.CarouselMessage.fromObject({
+                                                cards: tarjetas
+                                            })
+                                    })
+                            }
+                        }
+                    },
+                    { quoted: m }
+                );
+
+                await sock.relayMessage(
+                    from,
+                    carrusel.message,
+                    { messageId: carrusel.key.id }
                 );
             }
-
-            const carrusel = generateWAMessageFromContent(
-                from,
-                {
-                    viewOnceMessage: {
-                        message: {
-                            interactiveMessage:
-                                proto.Message.InteractiveMessage.fromObject({
-                                    body:
-                                        proto.Message.InteractiveMessage.Body.fromObject({
-                                            text:
-                                                '╭━━〔 📌 PINTEREST 〕━━╮\n' +
-                                                '┃\n' +
-                                                '┃ 🔎 Búsqueda: ' + busqueda + '\n' +
-                                                '┃ 🖼️ Resultados: ' + seleccion.length + '\n' +
-                                                '┃\n' +
-                                                '╰━━━━━━━━━━━━━━━━╯'
-                                        }),
-
-                                    footer:
-                                        proto.Message.InteractiveMessage.Footer.fromObject({
-                                            text: 'Friends Happy Bot'
-                                        }),
-
-                                    carouselMessage:
-                                        proto.Message.InteractiveMessage.CarouselMessage.fromObject({
-                                            cards: tarjetas
-                                        })
-                                })
-                        }
-                    }
-                },
-                {
-                    quoted: m
-                }
-            );
-
-            await sock.relayMessage(
-                from,
-                carrusel.message,
-                {
-                    messageId: carrusel.key.id
-                }
-            );
 
             await sock.sendMessage(from, {
-                react: {
-                    text: '✅',
-                    key: m.key
-                }
+                react: { text: '✅', key: m.key }
             });
         } catch (error) {
-            console.error(
-                'Error en búsqueda Pinterest:',
-                error.message
-            );
+            console.error('Error en búsqueda Pinterest:', error.message);
 
             await sock.sendMessage(from, {
-                react: {
-                    text: '❌',
-                    key: m.key
-                }
+                react: { text: '❌', key: m.key }
             }).catch(() => {});
 
             await sock.sendMessage(
                 from,
                 {
-                    text:
-                        '⚠️ No pude buscar en Pinterest.\n\n' +
-                        error.message
+                    text: '⚠️ No pude obtener imágenes. Prueba con otra búsqueda o un pin público.'
                 },
                 { quoted: m }
             );

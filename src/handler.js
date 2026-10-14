@@ -68,11 +68,24 @@ export async function handler(sock, chatUpdate, connectBot, isSub = false) {
             return;
         }
 
+        const msg = m.message || {};
+        let buttonBody = msg.buttonsResponseMessage?.selectedButtonId ||
+            msg.templateButtonReplyMessage?.selectedId ||
+            msg.listResponseMessage?.singleSelectReply?.selectedRowId ||
+            '';
+        const paramsJson = msg.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson;
+        if (!buttonBody && paramsJson) {
+            try {
+                const params = typeof paramsJson === 'string' ? JSON.parse(paramsJson) : paramsJson;
+                buttonBody = params?.id || params?.selectedButtonId || params?.row_id || params?.selectedRowId || '';
+            } catch {}
+        }
         let body = String(
-            m.message?.conversation || 
-            m.message?.extendedTextMessage?.text || 
-            m.message?.imageMessage?.caption || 
-            m.message?.videoMessage?.caption || 
+            buttonBody ||
+            msg.conversation ||
+            msg.extendedTextMessage?.text ||
+            msg.imageMessage?.caption ||
+            msg.videoMessage?.caption ||
             ''
         ).trim();
 
@@ -90,6 +103,39 @@ export async function handler(sock, chatUpdate, connectBot, isSub = false) {
 
         if (fueModerado) return;
 
+        for (let nombrePlugin in global.plugins) {
+            const pluginCargado =
+                global.plugins[nombrePlugin];
+
+            const plugin =
+                pluginCargado?.default ||
+                pluginCargado;
+
+            if (
+                !plugin ||
+                typeof plugin.before !== 'function'
+            ) {
+                continue;
+            }
+
+            try {
+                await plugin.before(rawM, {
+                    sock,
+                    from: chat,
+                    chat,
+                    isGroup,
+                    groupMetadata: null
+                });
+            } catch (error) {
+                console.error(
+                    '❌ Error en before de ' +
+                    nombrePlugin +
+                    ':',
+                    error.message
+                );
+            }
+        }
+
         const prefixes = ['.', '#'];
         const usedPrefix = prefixes.find(p => body.startsWith(p));
         if (!usedPrefix) return; 
@@ -98,6 +144,66 @@ export async function handler(sock, chatUpdate, connectBot, isSub = false) {
         const args = noPrefix.split(' ').filter(Boolean);
         const command = args.shift().toLowerCase();
         if (!command) return;
+
+        const libres = [
+            'reg',
+            'register',
+            'registrar',
+            'unreg',
+            'desregistrar'
+        ];
+
+        if (!libres.includes(command)) {
+            let base = {};
+
+            try {
+                if (fs.existsSync('database.json')) {
+                    base = JSON.parse(
+                        fs.readFileSync(
+                            'database.json',
+                            'utf8'
+                        )
+                    );
+                }
+            } catch {
+                base = {};
+            }
+
+            const ids = [
+                rawM.key?.participant,
+                rawM.key?.participantAlt,
+                rawM.key?.remoteJid,
+                rawM.key?.remoteJidAlt
+            ]
+                .filter(Boolean)
+                .map(id =>
+                    String(id)
+                        .replace(/:\\d+(?=@)/, '')
+                        .trim()
+                );
+
+            const registrado = ids.some(
+                id => Boolean(base[id])
+            );
+
+            if (!registrado) {
+                await sock.sendMessage(
+                    chat,
+                    {
+                        text:
+                            '📲 ɴᴇᴄᴇsɪᴛᴀs ᴇsᴛᴀʀ ʀᴇɢɪsᴛʀᴀᴅᴏ ' +
+                            'ᴘᴀʀᴀ ᴜsᴀʀ ᴇsᴇ ᴄᴏᴍᴀɴᴅᴏ.\n\n' +
+                            'ᴜsᴏ:\n' +
+                            '.reg nombre.edad\n\n' +
+                            'ᴇᴊᴇᴍᴘʟᴏ:\n' +
+                            '.reg Axel.18'
+                    },
+                    { quoted: rawM }
+                );
+
+                return;
+            }
+        }
 
         if (isGroup && command !== 'bot') {
             let estadosBot = {};
@@ -120,7 +226,9 @@ export async function handler(sock, chatUpdate, connectBot, isSub = false) {
               true &&
               isGroup &&
               command !== 'setbot' &&
-              command !== 'resetbot'
+              command !== 'resetbot' &&
+              command !== 'bot' &&
+              command !== 'setprimary'
           ) {
               let seleccionados = {};
 
@@ -149,10 +257,7 @@ export async function handler(sock, chatUpdate, connectBot, isSub = false) {
                   .split(':')[0]
                   .split('@')[0];
 
-              // Sin selección específica, solo responde el bot principal
-              if (!elegido && isSub) {
-                  return;
-              }
+              // Sin selección específica, responden el principal y los sub-bots.
 
               // Si el grupo tiene una selección, solo responde ese bot
               if (elegido && actual && elegido !== actual) {
@@ -327,11 +432,23 @@ export async function handler(sock, chatUpdate, connectBot, isSub = false) {
             };
 
             try {
+                if (typeof sock.sendPresenceUpdate === 'function') {
+                    try { await sock.sendPresenceUpdate('composing', chat); } catch (_) {}
+                }
+                await new Promise(resolve => setTimeout(resolve, 350));
+                if (!String(name).toLowerCase().includes('menu')) {
+                    sock.__channelButtonChats = sock.__channelButtonChats || new Set();
+                }
                 await executeFn(m, extraData);
                 console.log(chalk.bgGreen.black.bold(' ✅ [EXITO]: ' + name));
             } catch (err) {
                 console.error(chalk.red('❌ Error ejecutando [' + name + ']:'), err);
                 await sock.sendMessage(chat, { text: 'Error en ' + usedPrefix + command }, { quoted: rawM });
+            } finally {
+                sock.__channelButtonChats?.delete(chat);
+                if (typeof sock.sendPresenceUpdate === 'function') {
+                    try { await sock.sendPresenceUpdate('paused', chat); } catch (_) {}
+                }
             }
             return;
         }

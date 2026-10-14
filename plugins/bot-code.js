@@ -11,16 +11,13 @@ module.exports = {
     ) => {
         const numeroIngresado = String(args.join('') || '')
             .replace(/[^0-9]/g, '');
-        const numeroRemitente = String(senderNum || senderJid || '').replace(/[^0-9]/g, '');
+        const numeroRemitente = String(senderNum || senderJid || '')
+            .replace(/[^0-9]/g, '');
 
         const numero = numeroIngresado || numeroRemitente;
 
         const responder = texto =>
-            sock.sendMessage(
-                from,
-                { text: texto },
-                { quoted: m }
-            );
+            sock.sendMessage(from, { text: texto }, { quoted: m });
 
         if (!numero || numero.length < 10 || numero.length > 15) {
             return responder(
@@ -40,7 +37,6 @@ module.exports = {
                 );
             }
 
-            // Elimina registros antiguos o sesiones desconectadas
             db.prepare(
                 'DELETE FROM subbots WHERE jid = ?'
             ).run(numero);
@@ -50,13 +46,10 @@ module.exports = {
                 numero
             );
 
-            await fs.promises.rm(
-                carpetaSesion,
-                {
-                    recursive: true,
-                    force: true
-                }
-            );
+            await fs.promises.rm(carpetaSesion, {
+                recursive: true,
+                force: true
+            });
 
             await responder(
                 `⌛ Preparando el código de vinculación para ${numero}...`
@@ -80,22 +73,45 @@ module.exports = {
                               codigoLimpio.slice(4)
                             : codigoLimpio;
 
-                    await responder(
+                    const textoCodigo =
                         '📱 Abre WhatsApp en el número que quieres vincular.\n\n' +
                         '1️⃣ Entra a Ajustes.\n' +
                         '2️⃣ Abre Dispositivos vinculados.\n' +
                         '3️⃣ Pulsa Vincular un dispositivo.\n' +
                         '4️⃣ Elige Vincular con número de teléfono.\n\n' +
-                        '⌛ Introduce este código antes de que expire:'
-                    );
+                        '⌛ Introduce este código antes de que expire:\n\n' +
+                        `*${codigoFormateado}*`;
 
-                    await sock.sendMessage(
-                        from,
-                        {
-                            text: codigoFormateado
-                        },
-                        { quoted: m }
-                    );
+                    try {
+                        const { sendInteractiveMessage } =
+                            require('zqbaileys_helper');
+
+                        if (typeof sendInteractiveMessage !== 'function') {
+                            throw new Error('El helper no exporta sendInteractiveMessage');
+                        }
+
+                        await sendInteractiveMessage(sock, from, {
+                            text: textoCodigo,
+                            interactiveButtons: [{
+                                name: 'cta_copy',
+                                buttonParamsJson: JSON.stringify({
+                                    display_text: 'Copiar código',
+                                    copy_code: codigoFormateado
+                                })
+                            }]
+                        });
+                    } catch (error) {
+                        console.error(
+                            'No pude enviar el botón Copiar código:',
+                            error.message
+                        );
+
+                        await sock.sendMessage(
+                            from,
+                            { text: textoCodigo },
+                            { quoted: m }
+                        );
+                    }
                 },
 
                 onConnected: async () => {

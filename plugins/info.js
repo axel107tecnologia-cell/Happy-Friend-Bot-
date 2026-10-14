@@ -21,7 +21,7 @@ function cargarVersiones() {
         return JSON.parse(fs.readFileSync(archivo, 'utf8'));
     } catch {
         return {
-            versionActual: '1.0.0',
+            versionActual: '2.0.0',
             actualizaciones: 1,
             historial: []
         };
@@ -60,7 +60,7 @@ module.exports = {
             '╭━━〔 💎 INFORMACIÓN DEL BOT 〕━━╮\n' +
             '┃\n' +
             '┃ 🤖 NOMBRE\n' +
-            '┃ └─ FRIENDS HAPPY BOT\n' +
+            '┃ └─ 🌸 𝐁𝐨𝐭 𝐌𝐚𝐭𝐢𝐤𝐚𝐧𝐞𝐭𝐚𝐧𝐧𝐡𝐚𝐮𝐬𝐞𝐫 🌸\n' +
             '┃\n' +
             '┃ 👨‍💻 DESARROLLADOR\n' +
             '┃ └─ AXEL ALBERTO\n' +
