@@ -145,6 +145,49 @@ export async function handler(sock, chatUpdate, connectBot, isSub = false) {
         const command = args.shift().toLowerCase();
         if (!command) return;
 
+          if (
+              true &&
+              isGroup &&
+              command !== 'setbot' &&
+              command !== 'resetbot' &&
+              command !== 'bot' &&
+              command !== 'setprimary'
+          ) {
+              let seleccionados = {};
+
+              try {
+                  seleccionados = JSON.parse(
+                      fs.readFileSync(
+                          'setbot-groups.json',
+                          'utf8'
+                      )
+                  );
+              } catch {}
+
+              const elegido = String(
+                  seleccionados[chat] || ''
+              )
+                  .split(':')[0]
+                  .split('@')[0];
+
+              const actual = String(
+                  sock.__sessionJid ||
+                  sock.user?.id ||
+                  sock.user?.jid ||
+                  sock.user?.lid ||
+                  ''
+              )
+                  .split(':')[0]
+                  .split('@')[0];
+
+              // Sin selección específica, responden el principal y los sub-bots.
+
+              // Si el grupo tiene una selección, solo responde ese bot
+              if (elegido && actual && elegido !== actual) {
+                  return;
+              }
+          }
+
         const libres = [
             'reg',
             'register',
@@ -222,48 +265,7 @@ export async function handler(sock, chatUpdate, connectBot, isSub = false) {
             }
         }
 
-          if (
-              true &&
-              isGroup &&
-              command !== 'setbot' &&
-              command !== 'resetbot' &&
-              command !== 'bot' &&
-              command !== 'setprimary'
-          ) {
-              let seleccionados = {};
 
-              try {
-                  seleccionados = JSON.parse(
-                      fs.readFileSync(
-                          'setbot-groups.json',
-                          'utf8'
-                      )
-                  );
-              } catch {}
-
-              const elegido = String(
-                  seleccionados[chat] || ''
-              )
-                  .split(':')[0]
-                  .split('@')[0];
-
-              const actual = String(
-                  sock.__sessionJid ||
-                  sock.user?.id ||
-                  sock.user?.jid ||
-                  sock.user?.lid ||
-                  ''
-              )
-                  .split(':')[0]
-                  .split('@')[0];
-
-              // Sin selección específica, responden el principal y los sub-bots.
-
-              // Si el grupo tiene una selección, solo responde ese bot
-              if (elegido && actual && elegido !== actual) {
-                  return;
-              }
-          }
 
 
 
